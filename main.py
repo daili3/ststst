@@ -11,7 +11,7 @@ from data_fetcher import (
 from indicators import compute_all_indicators
 from signals import analyze_signals
 from report import generate_report, generate_summary, generate_combined_report
-from notifier import send_message, send_long_message, send_document
+from notifier import send_message, send_long_message, send_document, send_codeblock
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,13 +80,11 @@ def run_slot(slot_key: str) -> int:
     send_message(summary)
     logger.info("汇总已推送")
 
-    # 6. 推送合并简报（txt 文件，一次性复制给 AI）
+    # 6. 推送合并简报（代码块，长按一键复制给 AI）
     combined = generate_combined_report(all_data, slot["desc"])
-    today = datetime.now().strftime("%Y%m%d")
-    send_document(
+    send_codeblock(
         combined,
-        filename=f"stock_report_{today}_{slot_key}.txt",
-        caption=f"📋 {slot['desc']} 合并简报\n点开文件 → 全选复制 → 粘到 AI 网页版\n一次性分析全部 {len(all_data)} 只股票",
+        caption=f"📋 {slot['desc']} 合并简报（{len(all_data)} 只）\n长按下方代码块 → 复制 → 粘到 AI 网页版",
     )
     logger.info("合并简报已推送")
 

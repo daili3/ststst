@@ -44,6 +44,34 @@ def send_message(text: str, disable_preview: bool = True) -> bool:
         return False
 
 
+def send_codeblock(text: str, caption: str = "") -> bool:
+    """用代码块发送长文本（TG 里长按可一键复制）
+
+    Args:
+        text: 要放进代码块的内容
+        caption: 代码块前的说明文字
+    Returns:
+        bool: 是否发送成功
+    """
+    # TG 单条上限 4096，代码块标记 ``` 占 6 字符，留余量
+    max_len = 3800
+    if len(text) > max_len:
+        logger.warning(f"代码块内容超长({len(text)}>{max_len})，改发文件")
+        return send_document(text, caption=caption)
+
+    # 拼接：caption + 代码块
+    message = ""
+    if caption:
+        message = caption + "\n\n"
+    message += "```\n" + text + "\n```"
+
+    if len(message) > 4096:
+        # 加上 caption 和标记后超长，改发文件
+        return send_document(text, caption=caption)
+
+    return send_message(message)
+
+
 def send_long_message(text: str) -> bool:
     """发送长消息（按段落分多条）
     Telegram 单条上限 4096 字符
