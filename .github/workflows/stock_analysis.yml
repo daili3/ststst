@@ -1,0 +1,70 @@
+name: A股信号分析推送
+
+# 触发条件：5 个定时 + 手动
+# cron 用 UTC 时间，北京时间 = UTC + 8
+# 盘前提前到 9:00 触发，留 15 分钟延迟余量（GitHub Actions cron 通常延迟 5-15 分钟）
+on:
+  schedule:
+    - cron: '0 1 * * 1-5'    # 北京 09:00 → 盘前简报
+    - cron: '35 1 * * 1-5'   # 北京 09:35 → 开盘 5 分钟速报
+    - cron: '30 2 * * 1-5'   # 北京 10:30 → 盘中信号
+    - cron: '5 5 * * 1-5'    # 北京 13:05 → 午盘速报
+    - cron: '55 6 * * 1-5'   # 北京 14:55 → 尾盘决策
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: '选择执行时段（手动测试用）'
+        required: true
+        default: 'pre_open'
+        type: choice
+        options:
+          - pre_open
+          - open_5min
+          - mid_morning
+          - noon_open
+          - tail
+          - test
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 确定时段
+        id: slot
+        run: |
+          # 手动触发优先
+          if [ -n "${{ github.event.inputs.slot }}" ]; then
+            echo "slot=${{ github.event.inputs.slot }}" >> $GITHUB_OUTPUT
+            echo "来源: 手动触发"
+          else
+            # 定时触发：根据 schedule 字符串映射
+            case "${{ github.event.schedule }}" in
+              "0 1 * * 1-5")    echo "slot=pre_open" >> $GITHUB_OUTPUT ;;
+              "35 1 * * 1-5")   echo "slot=open_5min" >> $GITHUB_OUTPUT ;;
+              "30 2 * * 1-5")   echo "slot=mid_morning" >> $GITHUB_OUTPUT ;;
+              "5 5 * * 1-5")    echo "slot=noon_open" >> $GITHUB_OUTPUT ;;
+              "55 6 * * 1-5")   echo "slot=tail" >> $GITHUB_OUTPUT ;;
+              *)                echo "slot=pre_open" >> $GITHUB_OUTPUT ;;
+            esac
+            echo "来源: 定时触发 (${{ github.event.schedule }})"
+          fi
+
+      - name: 执行分析
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TZ: Asia/Shanghai
+        run: python main.py ${{ steps.slot.outputs.slot }}
