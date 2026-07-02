@@ -1,46 +1,92 @@
 """数据拉取：AkShare 行情 + 资金流 + 公告
 
-注意：AkShare 部分接口调东方财富，本机偶发卡死。
-已在所有调用处加 socket 默认超时（30 秒），避免无限等待。
-GitHub Actions 环境访问反而更稳定。
+AkShare 内部 requests 不吃 socket 超时，用 threading 强制硬超时 + 重试。
+GitHub Actions 环境访问东财偶发慢，但通常能成功。
 """
 import socket
+import threading
+import time
 import akshare as ak
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
-# 全局 socket 超时：30 秒。避免 AkShare 内部 requests 无限挂起
-_DEFAULT_TIMEOUT = 30.0
-socket.setdefaulttimeout(_DEFAULT_TIMEOUT)
+# 全局 socket 超时（兜底）
+socket.setdefaulttimeout(30.0)
+
+
+def _run_with_timeout(func, args=(), kwargs=None, timeout: float = 60.0):
+    """线程级硬超时：AkShare 内部 requests 不吃 socket 超时，用线程强制
+    Returns: func 的返回值，或超时返回 None
+    """
+    if kwargs is None:
+        kwargs = {}
+    result = [None]
+    error = [None]
+
+    def worker():
+        try:
+            result[0] = func(*args, **kwargs)
+        except Exception as e:
+            error[0] = e
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if t.is_alive():
+        # 线程还在跑，超时了
+        logger.warning(f"调用超时({timeout}s): {func.__name__}")
+        return None
+    if error[0]:
+        raise error[0]
+    return result[0]
+
+
+def _retry(func, args=(), kwargs=None, retries: int = 2, timeout: float = 60.0, delay: float = 3.0):
+    """带重试 + 硬超时的调用包装"""
+    if kwargs is None:
+        kwargs = {}
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            r = _run_with_timeout(func, args, kwargs, timeout)
+            if r is not None:
+                return r
+            logger.warning(f"{func.__name__} 第 {attempt + 1} 次返回空，重试")
+        except Exception as e:
+            last_err = e
+            logger.warning(f"{func.__name__} 第 {attempt + 1} 次失败: {e}")
+        if attempt < retries:
+            time.sleep(delay)
+    logger.error(f"{func.__name__} {retries + 1} 次均失败: {last_err}")
+    return None
 
 
 def get_daily_kline(code: str, market: str, days: int = 60) -> pd.DataFrame:
-    """拉日线 K 线（前复权）
-    Args:
-        code: 股票代码，如 "000001"
-        market: "sh" 或 "sz"
-        days: 拉取近 N 个交易日
-    Returns:
-        DataFrame: columns=["date","open","high","low","close","volume","amount"]
-    """
+    """拉日线 K 线（前复权），带硬超时 + 重试"""
     try:
-        # AkShare A股日线接口（前复权）
-        df = ak.stock_zh_a_hist(
-            symbol=code,
-            period="daily",
-            start_date=(datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d"),
-            end_date=datetime.now().strftime("%Y%m%d"),
-            adjust="qfq",
+        df = _retry(
+            ak.stock_zh_a_hist,
+            kwargs={
+                "symbol": code,
+                "period": "daily",
+                "start_date": (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d"),
+                "end_date": datetime.now().strftime("%Y%m%d"),
+                "adjust": "qfq",
+            },
+            retries=2,
+            timeout=45.0,
         )
-        if df is None or df.empty:
-            logger.warning(f"{code} 日线数据为空")
+        if df is None or (hasattr(df, "empty") and df.empty):
+            logger.warning(f"{code} 日线数据为空，尝试 baostock 降级")
+            return _fallback_baostock(code, days)
+        if not hasattr(df, "empty"):
+            logger.error(f"{code} 返回类型异常: {type(df)}")
             return pd.DataFrame()
 
-        # 统一列名
         df = df.rename(columns={
             "日期": "date", "开盘": "open", "最高": "high",
             "最低": "low", "收盘": "close", "成交量": "volume", "成交额": "amount",
@@ -54,13 +100,63 @@ def get_daily_kline(code: str, market: str, days: int = 60) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_realtime_quote(code: str) -> dict:
-    """拉实时行情（盘中用）
-    Returns:
-        dict: {name, price, change_pct, volume, amount, volume_ratio}
-    """
+def _fallback_baostock(code: str, days: int) -> pd.DataFrame:
+    """降级：用 baostock 拉日线（更稳但需要登录）"""
     try:
-        df = ak.stock_zh_a_spot_em()
+        import baostock as bs
+        lg = bs.login()
+        if lg.error_code != "0":
+            logger.error(f"baostock 登录失败: {lg.error_msg}")
+            return pd.DataFrame()
+
+        # baostock 代码格式：sh.600000 / sz.000001
+        bs_code = f"sh.{code}" if code.startswith("6") else f"sz.{code}"
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y-%m-%d")
+
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,open,high,low,close,volume,amount",
+            start_date=start, end_date=end,
+            frequency="d", adjustflag="2",
+        )
+        if rs.error_code != "0":
+            logger.error(f"baostock 查询失败: {rs.error_msg}")
+            return pd.DataFrame()
+
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        bs.logout()
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+        for c in ["open", "high", "low", "close", "volume", "amount"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.tail(days).reset_index(drop=True)
+        logger.info(f"{code} baostock 降级成功，{len(df)} 行")
+        return df
+    except ImportError:
+        logger.error("baostock 未安装，无法降级")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"baostock 降级失败: {e}")
+        return pd.DataFrame()
+
+
+def get_realtime_quote(code: str) -> dict:
+    """拉实时行情（盘中用）"""
+    try:
+        df = _retry(
+            ak.stock_zh_a_spot_em,
+            timeout=60.0,
+            retries=1,
+        )
+        if df is None or df.empty:
+            return {}
         row = df[df["代码"] == code]
         if row.empty:
             return {}
@@ -83,12 +179,14 @@ def get_realtime_quote(code: str) -> dict:
 
 
 def get_fund_flow(code: str, days: int = 5) -> pd.DataFrame:
-    """拉个股资金流向（T-1 数据，近 N 日主力净流入）
-    Returns:
-        DataFrame: columns=["date","main_net","super_large_net","large_net","medium_net","small_net"]
-    """
+    """拉个股资金流向"""
     try:
-        df = ak.stock_individual_fund_flow(stock=code, market="sh" if code.startswith("6") else "sz")
+        df = _retry(
+            ak.stock_individual_fund_flow,
+            kwargs={"stock": code, "market": "sh" if code.startswith("6") else "sz"},
+            timeout=45.0,
+            retries=1,
+        )
         if df is None or df.empty:
             return pd.DataFrame()
         df = df.rename(columns={
@@ -108,14 +206,20 @@ def get_fund_flow(code: str, days: int = 5) -> pd.DataFrame:
 
 
 def get_notices(code: str, days: int = 3) -> list:
-    """拉个股公告（近 N 天，只取标题）
-    Returns:
-        list[str]: 公告标题列表
-    """
+    """拉个股公告"""
     try:
         end = datetime.now()
         start = end - timedelta(days=days)
-        df = ak.stock_notice_report(symbol=code, start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"))
+        df = _retry(
+            ak.stock_notice_report,
+            kwargs={
+                "symbol": code,
+                "start_date": start.strftime("%Y%m%d"),
+                "end_date": end.strftime("%Y%m%d"),
+            },
+            timeout=30.0,
+            retries=0,
+        )
         if df is None or df.empty:
             return []
         title_col = "标题" if "标题" in df.columns else df.columns[1]
@@ -128,25 +232,17 @@ def get_notices(code: str, days: int = 3) -> list:
 def is_trading_day() -> bool:
     """检查今天是否为 A 股交易日"""
     try:
-        df = ak.tool_trade_date_hist_sina()
+        df = _retry(
+            ak.tool_trade_date_hist_sina,
+            timeout=20.0,
+            retries=1,
+        )
+        if df is None or df.empty:
+            # 兜底：周一到周五当交易日
+            return datetime.now().weekday() < 5
         today = datetime.now().strftime("%Y-%m-%d")
         trade_dates = df["trade_date"].astype(str).tolist()
         return today in trade_dates
     except Exception as e:
         logger.error(f"检查交易日失败，默认按工作日处理: {e}")
-        # 兜底：周一到周五当交易日
         return datetime.now().weekday() < 5
-
-
-if __name__ == "__main__":
-    # 快速自测
-    print("=== 测试日线 ===")
-    print(get_daily_kline("000001", "sz", 10))
-    print("\n=== 测试实时 ===")
-    print(get_realtime_quote("000001"))
-    print("\n=== 测试资金流 ===")
-    print(get_fund_flow("000001", 5))
-    print("\n=== 测试公告 ===")
-    print(get_notices("000001", 3))
-    print("\n=== 测试交易日 ===")
-    print(is_trading_day())
