@@ -139,3 +139,139 @@ def overall_bias(signals: list) -> str:
     if bear > bull:
         return "看空"
     return "中性"
+
+
+# ============ 信号评分系统（0-100）============
+# 每个信号对评分的贡献（正=看多，负=看空）
+SIGNAL_SCORES = {
+    "macd_golden_cross":         +15,
+    "macd_death_cross":          -15,
+    "ma_bullish_align":          +12,
+    "ma_bearish_align":          -12,
+    "breakout_20ma_with_volume": +18,
+    "volume_surge":              +0,   # 放量本身无方向
+    "kdj_overbought":            -10,
+    "kdj_oversold":              +10,
+    "rsi_overbought":            -10,
+    "rsi_oversold":              +10,
+}
+
+
+def calc_signal_score(signals: list, ind: dict) -> int:
+    """计算 0-100 信号评分
+    50 为中性，>50 看多，<50 看空
+    综合信号分 + 趋势分（价格与均线关系）
+    """
+    score = 50  # 基准
+
+    # 1. 信号加分/减分
+    for sig in signals:
+        score += SIGNAL_SCORES.get(sig, 0)
+
+    # 2. 趋势分：价格相对 20 日均线
+    price = ind.get("price")
+    ma_long = ind.get("ma_long")
+    if price and ma_long:
+        deviation = (price - ma_long) / ma_long * 100
+        # 偏离 20 日线 ±5% 给 ±10 分
+        if deviation > 5:
+            score += 10
+        elif deviation > 2:
+            score += 5
+        elif deviation < -5:
+            score -= 10
+        elif deviation < -2:
+            score -= 5
+
+    # 3. MACD 柱方向
+    macd_bar = ind.get("macd_bar", 0)
+    if macd_bar > 0:
+        score += 3
+    elif macd_bar < 0:
+        score -= 3
+
+    # 限制在 0-100
+    return max(0, min(100, int(score)))
+
+
+def score_label(score: int) -> str:
+    """评分转标签"""
+    if score >= 70:
+        return "强烈看多"
+    if score >= 55:
+        return "偏多"
+    if score > 45:
+        return "中性"
+    if score > 30:
+        return "偏空"
+    return "看空"
+
+
+def score_emoji(score: int) -> str:
+    """评分转 emoji"""
+    if score >= 70:
+        return "🟢"
+    if score >= 55:
+        return "🟢"
+    if score > 45:
+        return "⚪"
+    if score > 30:
+        return "🔴"
+    return "🔴"
+
+
+def trend_description(ind: dict) -> str:
+    """趋势人话描述"""
+    ma_s, ma_m, ma_l = ind.get("ma_short"), ind.get("ma_mid"), ind.get("ma_long")
+    price = ind.get("price")
+    if not all([ma_s, ma_m, ma_l, price]):
+        return "数据不足"
+
+    if ma_s > ma_m > ma_l and price > ma_s:
+        return "上涨趋势（多头排列）"
+    if ma_s < ma_m < ma_l and price < ma_s:
+        return "下跌趋势（空头排列）"
+    if ma_s > ma_m and price > ma_s:
+        return "反弹中（5日线上穿）"
+    if ma_s < ma_m and price < ma_s:
+        return "调整中（5日线下行）"
+    return "震荡"
+
+
+def momentum_description(ind: dict) -> str:
+    """动能人话描述（MACD）"""
+    dif, dea, bar = ind.get("macd_dif", 0), ind.get("macd_dea", 0), ind.get("macd_bar", 0)
+    prev_bar = ind.get("macd_prev_bar", 0)
+
+    if dif > dea and bar > 0:
+        if bar > prev_bar:
+            return "多头动能增强"
+        return "多头但动能减弱"
+    if dif < dea and bar < 0:
+        if bar < prev_bar:
+            return "空头动能增强"
+        return "空头但动能减弱"
+    return "动能平衡"
+
+
+def heat_description(ind: dict) -> str:
+    """热度人话描述（量比）"""
+    vr = ind.get("volume_ratio", 1.0)
+    if vr >= 2.0:
+        return f"明显放量（量比{vr}，资金活跃）"
+    if vr >= 1.5:
+        return f"温和放量（量比{vr}）"
+    if vr >= 0.8:
+        return f"成交正常（量比{vr}）"
+    return f"缩量（量比{vr}，没人玩）"
+
+
+def key_levels(ind: dict) -> dict:
+    """关键价位"""
+    return {
+        "压力1": ind.get("ma_short"),
+        "压力2": ind.get("ma_mid"),
+        "支撑1": ind.get("ma_long"),
+        "支撑2": ind.get("boll_lower"),
+        "上轨": ind.get("boll_upper"),
+    }

@@ -1,114 +1,154 @@
-"""报告生成：Markdown 数据简报（用于喂给 AI 网页版）"""
+"""报告生成：三段式简报（人话结论 + AI提示词 + 详细数据）"""
 from datetime import datetime
-from signals import format_signal, overall_bias
+from signals import (
+    format_signal, overall_bias, calc_signal_score, score_label, score_emoji,
+    trend_description, momentum_description, heat_description, key_levels,
+)
 from config import AI_PROMPT_TEMPLATE
 
 
 def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices: list,
                     slot_desc: str, realtime: dict = None) -> str:
-    """生成单只股票的数据简报
-
-    Args:
-        stock: {"code","name","market"}
-        ind: 指标字典
-        signals: 信号列表
-        fund_flow_df: 资金流 DataFrame
-        notices: 公告标题列表
-        slot_desc: 时段描述，如 "盘前简报"
-        realtime: 实时行情 dict（盘中用），None 表示盘前
+    """生成三段式简报：
+    1. 人话结论（小白看）
+    2. AI 提示词（复制用）
+    3. 详细数据（AI 吃）
     """
     today = datetime.now().strftime("%Y-%m-%d")
     code, name = stock["code"], stock["name"]
-    bias = overall_bias(signals)
 
-    # 价格部分
+    # 评分
+    score = calc_signal_score(signals, ind)
+    label = score_label(score)
+    emoji = score_emoji(score)
+
+    # 趋势/动能/热度
+    trend = trend_description(ind)
+    momentum = momentum_description(ind)
+    heat = heat_description(ind)
+    levels = key_levels(ind)
+
+    # 价格
     if realtime and realtime.get("price"):
-        price_line = f"- 实时价: {realtime['price']} ({realtime['change_pct']:+.2f}%)"
-        ohlc_line = (f"- 今开: {realtime['open']}  最高: {realtime['high']}  "
-                     f"最低: {realtime['low']}  昨收: {realtime['prev_close']}")
+        price_line = f"现价 {realtime['price']} ({realtime['change_pct']:+.2f}%)"
+        ohlc_line = f"今开 {realtime['open']} / 高 {realtime['high']} / 低 {realtime['low']} / 昨收 {realtime['prev_close']}"
     else:
-        price_line = f"- 前收: {ind.get('price')}"
-        ohlc_line = (f"- 昨开: {ind.get('today_open')}  昨高: {ind.get('today_high')}  "
-                     f"昨低: {ind.get('today_low')}  昨收: {ind.get('prev_close')}")
+        price_line = f"前收 {ind.get('price')}"
+        ohlc_line = f"开 {ind.get('today_open')} / 高 {ind.get('today_high')} / 低 {ind.get('today_low')} / 昨收 {ind.get('prev_close')}"
 
-    # 信号部分
+    # 信号
     if signals:
-        sig_lines = "\n".join(f"- {format_signal(s)}" for s in signals)
+        sig_lines = "\n".join(f"  {format_signal(s)}" for s in signals)
     else:
-        sig_lines = "- 无明显信号"
+        sig_lines = "  无明显信号"
 
-    # 资金流部分
+    # 资金流
     if fund_flow_df is not None and not fund_flow_df.empty:
         ff_lines = []
         for _, r in fund_flow_df.iterrows():
             d = r["date"].strftime("%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
             main = r["main_net"]
             arrow = "🔴" if main < 0 else "🟢"
-            # 兼容 baostock 降级版（带 change_pct）
             if "change_pct" in r:
-                ff_lines.append(f"- {d} {arrow} 涨跌: {r['change_pct']:+.2f}%  成交额: {r['amount']/1e8:.2f}亿  近似主力: {main/1e8:+.2f}亿")
+                ff_lines.append(f"  {d} {arrow} 涨跌 {r['change_pct']:+.2f}% 成交额 {r['amount']/1e8:.2f}亿 近似主力 {main/1e8:+.2f}亿")
             else:
-                ff_lines.append(f"- {d} {arrow} 主力净流入: {main / 1e8:+.2f}亿")
+                ff_lines.append(f"  {d} {arrow} 主力净流入 {main / 1e8:+.2f}亿")
         fund_flow_section = "\n".join(ff_lines)
     else:
-        fund_flow_section = "- 资金流数据暂无"
+        fund_flow_section = "  资金流数据暂无"
 
-    # 公告部分
-    if notices:
-        notice_section = "\n".join(f"- {n}" for n in notices)
+    # 公告
+    notice_section = "\n".join(f"  {n}" for n in notices) if notices else "  近3日无新公告"
+
+    # 关键价位
+    levels_line = f"压力 {levels.get('压力2')} / {levels.get('压力1')}  支撑 {levels.get('支撑1')} / {levels.get('支撑2')}"
+
+    # 一句话建议
+    if score >= 70:
+        advice = "多信号共振看多，可关注买入机会"
+    elif score >= 55:
+        advice = "偏多，可小仓位跟进"
+    elif score > 45:
+        advice = "方向不明，建议观望"
+    elif score > 30:
+        advice = "偏空，不参与"
     else:
-        notice_section = "- 近3日无新公告"
+        advice = "弱势明显，回避"
 
-    report = f"""# {code} {name} 信号简报
-**日期**: {today}  **时段**: {slot_desc}  **综合倾向**: {bias}
+    # ========== 三段式拼接 ==========
+    report = f"""{emoji} {name}({code}) | {label} | 评分 {score}/100
+{today} {slot_desc}
 
+📌 一句话：{advice}
+📈 趋势：{trend}
+⚡ 动能：{momentum}
+🌡 热度：{heat}
+🎯 关键位：{levels_line}
+💰 价格：{price_line}
+   {ohlc_line}
+
+━━━━━━━━━━━━━━━━━━━━
+🤖 复制下面整段给 AI 网页版（DeepSeek/Kimi）获取详细操作建议：
+```
+{AI_PROMPT_TEMPLATE.strip()}
+
+# {code} {name} 数据简报 {today}
 ## 价格
-{price_line}
-{ohlc_line}
-- 5日均价: {ind.get('ma_short')}  10日均价: {ind.get('ma_mid')}  20日均价: {ind.get('ma_long')}
-
+- {price_line}
+- {ohlc_line}
+- 5日 {ind.get('ma_short')} / 10日 {ind.get('ma_mid')} / 20日 {ind.get('ma_long')}
 ## 技术指标
 - MACD: DIF {ind.get('macd_dif')} / DEA {ind.get('macd_dea')} / 柱 {ind.get('macd_bar')}
 - KDJ: K {ind.get('kdj_k')} / D {ind.get('kdj_d')} / J {ind.get('kdj_j')}
 - RSI(6): {ind.get('rsi')}
 - 布林带: 上轨 {ind.get('boll_upper')} / 中轨 {ind.get('boll_mid')} / 下轨 {ind.get('boll_lower')}
 - 量比: {ind.get('volume_ratio')}
-
 ## 信号
 {sig_lines}
-
-## 近{len(fund_flow_df) if fund_flow_df is not None and not fund_flow_df.empty else 0}日资金流
+## 资金流
 {fund_flow_section}
-
-## 近3日公告
+## 公告
 {notice_section}
-
----
-**操作建议请复制以下提示词给 AI 网页版（如 DeepSeek/Kimi）**：
-```
-{AI_PROMPT_TEMPLATE.strip()}
 ```
 """
     return report
 
 
 def generate_summary(all_reports: list, slot_desc: str) -> str:
-    """生成汇总消息（先发汇总，再发详细简报）"""
+    """生成汇总消息：按评分排名 + 重点关注"""
     today = datetime.now().strftime("%Y-%m-%d")
-    header = f"📊 {today} {slot_desc}\n共分析 {len(all_reports)} 只 | "
 
-    bull = sum(1 for _, s, _ in all_reports if any(x.startswith("✅") or "💡" in x for x in [format_signal(sig) for sig in s]))
-    bear = sum(1 for _, s, _ in all_reports if any(x.startswith("🔴") or "⚠️" in x for x in [format_signal(sig) for sig in s]))
-    neutral = len(all_reports) - bull - bear
-
-    header += f"看多信号: {bull} | 看空信号: {bear} | 中性: {neutral}\n\n"
-
+    # 按评分排序
+    ranked = []
     for stock, signals, ind in all_reports:
-        code, name = stock["code"], stock["name"]
-        bias = overall_bias(signals)
-        emoji = "🟢" if bias == "看多" else ("🔴" if bias == "看空" else "⚪")
-        sig_text = " / ".join(format_signal(s) for s in signals) if signals else "无信号"
-        header += f"{emoji} {name}({code}): {bias} | {sig_text}\n"
+        score = calc_signal_score(signals, ind)
+        ranked.append((stock, signals, ind, score))
+    ranked.sort(key=lambda x: x[3], reverse=True)
 
-    header += "\n详细简报见后续消息，复制给 AI 网页版即可获取操作建议。"
+    header = f"📊 {today} {slot_desc}\n"
+    header += f"共 {len(ranked)} 只 | "
+
+    bull = sum(1 for _, _, _, s in ranked if s >= 55)
+    bear = sum(1 for _, _, _, s in ranked if s < 45)
+    neutral = len(ranked) - bull - bear
+    header += f"🟢偏多 {bull}  ⚪中性 {neutral}  🔴偏空 {bear}\n"
+    header += "━━━━━━━━━━━━━━━━━━━━\n"
+    header += "🏆 评分排名：\n\n"
+
+    for i, (stock, signals, ind, score) in enumerate(ranked, 1):
+        code, name = stock["code"], stock["name"]
+        emoji = score_emoji(score)
+        label = score_label(score)
+        # 最值得关注：评分最高 + 评分最低
+        if i == 1:
+            mark = "⭐ 重点关注"
+        elif i == len(ranked):
+            mark = "⚠️ 最弱"
+        else:
+            mark = ""
+        header += f"{i}. {emoji} {name}({code}) {score}分 {label} {mark}\n"
+
+    header += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    header += "后续消息是每只股票的详细简报，复制给 AI 网页版获取操作建议。"
+
     return header
