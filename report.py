@@ -198,18 +198,36 @@ def generate_combined_report(all_data: list, slot_desc: str) -> str:
             sig_text = "无明显信号"
         text += f"信号: {sig_text}\n"
 
-        # 资金流
+        # 资金流 + 近5日走势小结
         if fund_flow_df is not None and not fund_flow_df.empty:
             ff_parts = []
+            changes = []
             for _, r in fund_flow_df.iterrows():
                 d = r["date"].strftime("%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
                 main = r["main_net"]
                 arrow = "↓" if main < 0 else "↑"
                 if "change_pct" in r:
                     ff_parts.append(f"{d} {arrow}{r['change_pct']:+.2f}% 额{r['amount']/1e8:.1f}亿 主{main/1e8:+.1f}亿")
+                    changes.append(float(r["change_pct"]))
                 else:
                     ff_parts.append(f"{d} {arrow}主{main/1e8:+.1f}亿")
             text += f"资金流: {' | '.join(ff_parts)}\n"
+
+            # 近5日走势小结（帮 AI 判断趋势）
+            if changes:
+                up_days = sum(1 for c in changes if c > 0)
+                down_days = sum(1 for c in changes if c < 0)
+                total_change = sum(changes)
+                max_up = max(changes) if changes else 0
+                max_down = min(changes) if changes else 0
+                summary_parts = []
+                summary_parts.append(f"近{len(changes)}日{up_days}涨{down_days}跌")
+                summary_parts.append(f"累计{total_change:+.2f}%")
+                if max_up > 0:
+                    summary_parts.append(f"最大涨幅{max_up:+.2f}%")
+                if max_down < 0:
+                    summary_parts.append(f"最大跌幅{max_down:+.2f}%")
+                text += f"走势小结: {'，'.join(summary_parts)}\n"
         else:
             text += "资金流: 暂无\n"
 
