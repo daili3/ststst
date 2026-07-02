@@ -10,8 +10,8 @@ from data_fetcher import (
 )
 from indicators import compute_all_indicators
 from signals import analyze_signals
-from report import generate_report, generate_summary
-from notifier import send_message, send_long_message
+from report import generate_report, generate_summary, generate_combined_report
+from notifier import send_message, send_long_message, send_document
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,11 +59,15 @@ def run_slot(slot_key: str) -> int:
         return 1
 
     all_reports = []
+    all_data = []  # 含资金流和公告，用于合并简报
     for stock in STOCK_LIST:
         try:
             stock, signals, ind, realtime = analyze_one_stock(stock, slot["use_realtime"])
             if ind:
-                all_reports.append((stock, signals, ind, realtime))
+                fund_flow = get_fund_flow(stock["code"])
+                notices = get_notices(stock["code"])
+                all_reports.append((stock, signals, ind))
+                all_data.append((stock, signals, ind, fund_flow, notices, realtime))
         except Exception as e:
             logger.error(f"{stock['code']} 分析异常: {e}", exc_info=True)
 
@@ -71,24 +75,20 @@ def run_slot(slot_key: str) -> int:
         send_message(f"⚠️ {slot['desc']}：所有股票数据拉取失败，请检查日志")
         return 2
 
-    # 5. 推送汇总
-    summary = generate_summary(
-        [(s, sig, ind) for s, sig, ind, _ in all_reports],
-        slot["desc"],
-    )
+    # 5. 推送汇总（评分排名）
+    summary = generate_summary(all_reports, slot["desc"])
     send_message(summary)
     logger.info("汇总已推送")
 
-    # 6. 逐只推送详细简报
-    for stock, signals, ind, realtime in all_reports:
-        fund_flow = get_fund_flow(stock["code"])
-        notices = get_notices(stock["code"])
-        report = generate_report(
-            stock, ind, signals, fund_flow, notices,
-            slot_desc=slot["desc"], realtime=realtime,
-        )
-        send_long_message(report)
-        logger.info(f"{stock['code']} 简报已推送")
+    # 6. 推送合并简报（txt 文件，一次性复制给 AI）
+    combined = generate_combined_report(all_data, slot["desc"])
+    today = datetime.now().strftime("%Y%m%d")
+    send_document(
+        combined,
+        filename=f"stock_report_{today}_{slot_key}.txt",
+        caption=f"📋 {slot['desc']} 合并简报\n点开文件 → 全选复制 → 粘到 AI 网页版\n一次性分析全部 {len(all_data)} 只股票",
+    )
+    logger.info("合并简报已推送")
 
     logger.info(f"========== {slot['desc']} 完成 ==========")
     return 0

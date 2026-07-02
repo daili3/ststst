@@ -1,11 +1,13 @@
 """Telegram 推送"""
 import requests
 import logging
+from datetime import datetime
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
 logger = logging.getLogger(__name__)
 
 TG_API = "https://api.telegram.org/bot{token}/sendMessage"
+TG_DOC_API = "https://api.telegram.org/bot{token}/sendDocument"
 
 
 def send_message(text: str, disable_preview: bool = True) -> bool:
@@ -62,3 +64,39 @@ def send_long_message(text: str) -> bool:
     for sec in sections[1:]:
         send_message("## " + sec)
     return True
+
+
+def send_document(text: str, filename: str = None, caption: str = "") -> bool:
+    """发送文本文件（用于长简报，方便用户一键复制）
+
+    Args:
+        text: 文本内容
+        filename: 文件名（不含路径）
+        caption: 文件说明（TG 显示在文件下方）
+    Returns:
+        bool: 是否发送成功
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.error("Telegram 配置缺失")
+        return False
+
+    if not filename:
+        filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+
+    url = TG_DOC_API.format(token=TELEGRAM_BOT_TOKEN)
+    files = {
+        "document": (filename, text.encode("utf-8"), "text/plain"),
+    }
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "caption": caption[:1024] if caption else "",  # TG caption 上限 1024
+    }
+    try:
+        resp = requests.post(url, files=files, data=data, timeout=60)
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
+        logger.error(f"TG 文档发送失败: {resp.status_code} {resp.text[:200]}")
+        return False
+    except Exception as e:
+        logger.error(f"TG 文档发送异常: {e}")
+        return False

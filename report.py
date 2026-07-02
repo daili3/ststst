@@ -1,10 +1,10 @@
-"""报告生成：三段式简报（人话结论 + AI提示词 + 详细数据）"""
+"""报告生成：三段式简报（人话结论 + AI提示词 + 详细数据）+ 合并简报"""
 from datetime import datetime
 from signals import (
     format_signal, overall_bias, calc_signal_score, score_label, score_emoji,
     trend_description, momentum_description, heat_description, key_levels,
 )
-from config import AI_PROMPT_TEMPLATE
+from config import AI_PROMPT_TEMPLATE, AI_PROMPT_BATCH
 
 
 def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices: list,
@@ -28,13 +28,13 @@ def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices
     heat = heat_description(ind)
     levels = key_levels(ind)
 
-    # 价格
+    # 价格（命名修正：price=最近收盘, prev_close=前日收盘）
     if realtime and realtime.get("price"):
         price_line = f"现价 {realtime['price']} ({realtime['change_pct']:+.2f}%)"
         ohlc_line = f"今开 {realtime['open']} / 高 {realtime['high']} / 低 {realtime['low']} / 昨收 {realtime['prev_close']}"
     else:
-        price_line = f"前收 {ind.get('price')}"
-        ohlc_line = f"开 {ind.get('today_open')} / 高 {ind.get('today_high')} / 低 {ind.get('today_low')} / 昨收 {ind.get('prev_close')}"
+        price_line = f"昨收 {ind.get('price')}"
+        ohlc_line = f"开 {ind.get('today_open')} / 高 {ind.get('today_high')} / 低 {ind.get('today_low')} / 前收 {ind.get('prev_close')}"
 
     # 信号
     if signals:
@@ -152,3 +152,76 @@ def generate_summary(all_reports: list, slot_desc: str) -> str:
     header += "后续消息是每只股票的详细简报，复制给 AI 网页版获取操作建议。"
 
     return header
+
+
+def generate_combined_report(all_data: list, slot_desc: str) -> str:
+    """生成合并简报：所有股票数据打包，一次性复制给 AI
+
+    Args:
+        all_data: [(stock, signals, ind, fund_flow_df, notices, realtime), ...]
+        slot_desc: 时段描述
+    Returns:
+        合并文本，用于发送 TG 文档
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    text = AI_PROMPT_BATCH.strip() + "\n\n"
+    text += f"# {today} {slot_desc} 合并数据简报（共 {len(all_data)} 只）\n\n"
+
+    for stock, signals, ind, fund_flow_df, notices, realtime in all_data:
+        code, name = stock["code"], stock["name"]
+        score = calc_signal_score(signals, ind)
+
+        text += f"━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"# {code} {name} 评分:{score}/100\n"
+
+        # 价格
+        if realtime and realtime.get("price"):
+            text += f"现价 {realtime['price']} ({realtime['change_pct']:+.2f}%)\n"
+            text += f"今开 {realtime['open']} / 高 {realtime['high']} / 低 {realtime['low']} / 昨收 {realtime['prev_close']}\n"
+        else:
+            text += f"昨收 {ind.get('price')}\n"
+            text += f"开 {ind.get('today_open')} / 高 {ind.get('today_high')} / 低 {ind.get('today_low')} / 前收 {ind.get('prev_close')}\n"
+        text += f"5日 {ind.get('ma_short')} / 10日 {ind.get('ma_mid')} / 20日 {ind.get('ma_long')}\n"
+
+        # 指标
+        text += f"MACD: DIF {ind.get('macd_dif')} / DEA {ind.get('macd_dea')} / 柱 {ind.get('macd_bar')}\n"
+        text += f"KDJ: K {ind.get('kdj_k')} / D {ind.get('kdj_d')} / J {ind.get('kdj_j')}\n"
+        text += f"RSI(6): {ind.get('rsi')}\n"
+        text += f"布林带: 上轨 {ind.get('boll_upper')} / 中轨 {ind.get('boll_mid')} / 下轨 {ind.get('boll_lower')}\n"
+        text += f"量比: {ind.get('volume_ratio')}\n"
+
+        # 信号
+        if signals:
+            sig_text = " / ".join(format_signal(s).strip() for s in signals)
+        else:
+            sig_text = "无明显信号"
+        text += f"信号: {sig_text}\n"
+
+        # 资金流
+        if fund_flow_df is not None and not fund_flow_df.empty:
+            ff_parts = []
+            for _, r in fund_flow_df.iterrows():
+                d = r["date"].strftime("%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
+                main = r["main_net"]
+                arrow = "↓" if main < 0 else "↑"
+                if "change_pct" in r:
+                    ff_parts.append(f"{d} {arrow}{r['change_pct']:+.2f}% 额{r['amount']/1e8:.1f}亿 主{main/1e8:+.1f}亿")
+                else:
+                    ff_parts.append(f"{d} {arrow}主{main/1e8:+.1f}亿")
+            text += f"资金流: {' | '.join(ff_parts)}\n"
+        else:
+            text += "资金流: 暂无\n"
+
+        # 公告
+        if notices:
+            text += f"公告: {' / '.join(notices[:3])}\n"
+        else:
+            text += "公告: 无\n"
+
+        text += "\n"
+
+    text += "━━━━━━━━━━━━━━━━━━━━\n"
+    text += "请对以上每只股票分别给出：买/观/卖结论 + 买入位 + 止损位 + 目标位 + 最大风险点。"
+
+    return text
