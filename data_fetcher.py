@@ -2,6 +2,7 @@
 
 AkShare 内部 requests 不吃 socket 超时，用 threading 强制硬超时 + 重试。
 GitHub Actions 环境访问东财偶发慢，但通常能成功。
+baostock 作为降级方案，全局复用登录。
 """
 import socket
 import threading
@@ -15,6 +16,39 @@ logger = logging.getLogger(__name__)
 
 # 全局 socket 超时（兜底）
 socket.setdefaulttimeout(30.0)
+
+# baostock 全局登录复用（避免反复 login/logout）
+_BS_LOGGED_IN = False
+
+
+def _ensure_baostock_login():
+    """全局复用 baostock 登录"""
+    global _BS_LOGGED_IN
+    if _BS_LOGGED_IN:
+        return True
+    try:
+        import baostock as bs
+        lg = bs.login()
+        if lg.error_code == "0":
+            _BS_LOGGED_IN = True
+            return True
+        logger.error(f"baostock 登录失败: {lg.error_msg}")
+        return False
+    except Exception as e:
+        logger.error(f"baostock 登录异常: {e}")
+        return False
+
+
+def baostock_logout():
+    """进程结束时调用"""
+    global _BS_LOGGED_IN
+    if _BS_LOGGED_IN:
+        try:
+            import baostock as bs
+            bs.logout()
+            _BS_LOGGED_IN = False
+        except Exception:
+            pass
 
 
 def _run_with_timeout(func, args=(), kwargs=None, timeout: float = 60.0):
@@ -101,15 +135,12 @@ def get_daily_kline(code: str, market: str, days: int = 60) -> pd.DataFrame:
 
 
 def _fallback_baostock(code: str, days: int) -> pd.DataFrame:
-    """降级：用 baostock 拉日线（更稳但需要登录）"""
+    """降级：用 baostock 拉日线（更稳，复用全局登录）"""
     try:
         import baostock as bs
-        lg = bs.login()
-        if lg.error_code != "0":
-            logger.error(f"baostock 登录失败: {lg.error_msg}")
+        if not _ensure_baostock_login():
             return pd.DataFrame()
 
-        # baostock 代码格式：sh.600000 / sz.000001
         bs_code = f"sh.{code}" if code.startswith("6") else f"sz.{code}"
         end = datetime.now().strftime("%Y-%m-%d")
         start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y-%m-%d")
@@ -127,7 +158,6 @@ def _fallback_baostock(code: str, days: int) -> pd.DataFrame:
         rows = []
         while rs.next():
             rows.append(rs.get_row_data())
-        bs.logout()
 
         if not rows:
             return pd.DataFrame()
@@ -179,7 +209,9 @@ def get_realtime_quote(code: str) -> dict:
 
 
 def get_fund_flow(code: str, days: int = 5) -> pd.DataFrame:
-    """拉个股资金流向"""
+    """拉个股资金流向
+    AkShare 在境外 IP 经常失败，降级用 baostock 拿成交量+涨跌幅做近似
+    """
     try:
         df = _retry(
             ak.stock_individual_fund_flow,
@@ -187,42 +219,84 @@ def get_fund_flow(code: str, days: int = 5) -> pd.DataFrame:
             timeout=45.0,
             retries=1,
         )
-        if df is None or df.empty:
-            return pd.DataFrame()
-        df = df.rename(columns={
-            "日期": "date", "主力净流入-净额": "main_net",
-            "超大单净流入-净额": "super_large_net",
-            "大单净流入-净额": "large_net",
-            "中单净流入-净额": "medium_net",
-            "小单净流入-净额": "small_net",
-        })
-        df["date"] = pd.to_datetime(df["date"])
-        df = df[["date", "main_net", "super_large_net", "large_net", "medium_net", "small_net"]]
-        df = df.tail(days).reset_index(drop=True)
-        return df
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "日期": "date", "主力净流入-净额": "main_net",
+                "超大单净流入-净额": "super_large_net",
+                "大单净流入-净额": "large_net",
+                "中单净流入-净额": "medium_net",
+                "小单净流入-净额": "small_net",
+            })
+            df["date"] = pd.to_datetime(df["date"])
+            df = df[["date", "main_net", "super_large_net", "large_net", "medium_net", "small_net"]]
+            df = df.tail(days).reset_index(drop=True)
+            return df
+        # AkShare 失败，降级 baostock
+        logger.info(f"{code} AkShare 资金流失败，用 baostock 近似")
+        return _fallback_fund_flow_baostock(code, days)
     except Exception as e:
         logger.error(f"拉取 {code} 资金流失败: {e}")
+        return _fallback_fund_flow_baostock(code, days)
+
+
+def _fallback_fund_flow_baostock(code: str, days: int) -> pd.DataFrame:
+    """baostock 无真实资金流，用成交量+涨跌幅做近似主力动向（复用全局登录）"""
+    try:
+        import baostock as bs
+        if not _ensure_baostock_login():
+            return pd.DataFrame()
+        bs_code = f"sh.{code}" if code.startswith("6") else f"sz.{code}"
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y-%m-%d")
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,preclose,close,volume,amount",
+            start_date=start, end_date=end, frequency="d",
+        )
+        if rs.error_code != "0":
+            return pd.DataFrame()
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date", "preclose", "close", "volume", "amount"])
+        for c in ["preclose", "close", "volume", "amount"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"])
+        df["change_pct"] = (df["close"] - df["preclose"]) / df["preclose"] * 100
+        df["main_net"] = df["amount"] * df["change_pct"].apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0)) * 0.3
+        df = df[["date", "main_net", "volume", "amount", "change_pct"]].tail(days).reset_index(drop=True)
+        logger.info(f"{code} baostock 近似资金流成功，{len(df)} 行")
+        return df
+    except Exception as e:
+        logger.error(f"baostock 近似资金流失败: {e}")
         return pd.DataFrame()
 
 
 def get_notices(code: str, days: int = 3) -> list:
-    """拉个股公告"""
+    """拉个股公告（接口参数已变，用新接口）"""
     try:
+        # 新版接口：stock_notice_report(symbol=*, date=*)
+        # date 格式 "20260703"
         end = datetime.now()
         start = end - timedelta(days=days)
         df = _retry(
             ak.stock_notice_report,
-            kwargs={
-                "symbol": code,
-                "start_date": start.strftime("%Y%m%d"),
-                "end_date": end.strftime("%Y%m%d"),
-            },
+            kwargs={"symbol": code, "date": end.strftime("%Y%m%d")},
             timeout=30.0,
             retries=0,
         )
         if df is None or df.empty:
             return []
-        title_col = "标题" if "标题" in df.columns else df.columns[1]
+        # 兼容多种列名
+        title_col = None
+        for c in ["标题", "title", "公告标题", "announcement_title"]:
+            if c in df.columns:
+                title_col = c
+                break
+        if title_col is None:
+            title_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
         return df[title_col].head(5).tolist()
     except Exception as e:
         logger.error(f"拉取 {code} 公告失败: {e}")

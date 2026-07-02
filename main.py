@@ -6,7 +6,7 @@ from datetime import datetime
 from config import STOCK_LIST, SCHEDULE_SLOTS
 from data_fetcher import (
     get_daily_kline, get_realtime_quote, get_fund_flow,
-    get_notices, is_trading_day,
+    get_notices, is_trading_day, baostock_logout,
 )
 from indicators import compute_all_indicators
 from signals import analyze_signals
@@ -143,4 +143,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        baostock_logout()

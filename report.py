@@ -44,7 +44,11 @@ def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices
             d = r["date"].strftime("%m-%d") if hasattr(r["date"], "strftime") else str(r["date"])[:10]
             main = r["main_net"]
             arrow = "🔴" if main < 0 else "🟢"
-            ff_lines.append(f"- {d} {arrow} 主力净流入: {main / 1e8:+.2f}亿")
+            # 兼容 baostock 降级版（带 change_pct）
+            if "change_pct" in r:
+                ff_lines.append(f"- {d} {arrow} 涨跌: {r['change_pct']:+.2f}%  成交额: {r['amount']/1e8:.2f}亿  近似主力: {main/1e8:+.2f}亿")
+            else:
+                ff_lines.append(f"- {d} {arrow} 主力净流入: {main / 1e8:+.2f}亿")
         fund_flow_section = "\n".join(ff_lines)
     else:
         fund_flow_section = "- 资金流数据暂无"
