@@ -274,30 +274,35 @@ def _fallback_fund_flow_baostock(code: str, days: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_notices(code: str, days: int = 3) -> list:
-    """拉个股公告（接口参数已变，用新接口）"""
+def get_notices(code: str, days: int = 7) -> list:
+    """拉个股公告（近 N 天）
+    用 stock_individual_notice_report（东财接口，按 security + 日期范围查询）
+    返回 [{"title": ..., "type": ..., "date": ...}, ...]
+    """
     try:
-        # 新版接口：stock_notice_report(symbol=*, date=*)
-        # date 格式 "20260703"
         end = datetime.now()
         start = end - timedelta(days=days)
         df = _retry(
-            ak.stock_notice_report,
-            kwargs={"symbol": code, "date": end.strftime("%Y%m%d")},
+            ak.stock_individual_notice_report,
+            kwargs={
+                "security": code,
+                "begin_date": start.strftime("%Y%m%d"),
+                "end_date": end.strftime("%Y%m%d"),
+            },
             timeout=30.0,
-            retries=0,
+            retries=1,
         )
-        if df is None or df.empty:
+        if df is None or (hasattr(df, "empty") and df.empty):
             return []
-        # 兼容多种列名
-        title_col = None
-        for c in ["标题", "title", "公告标题", "announcement_title"]:
-            if c in df.columns:
-                title_col = c
-                break
-        if title_col is None:
-            title_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-        return df[title_col].head(5).tolist()
+        # 列名: 代码 / 名称 / 公告标题 / 公告类型 / 公告日期 / 网址
+        result = []
+        for _, row in df.head(5).iterrows():
+            result.append({
+                "title": str(row.get("公告标题", "")).strip(),
+                "type": str(row.get("公告类型", "")).strip(),
+                "date": str(row.get("公告日期", "")).strip(),
+            })
+        return result
     except Exception as e:
         logger.error(f"拉取 {code} 公告失败: {e}")
         return []

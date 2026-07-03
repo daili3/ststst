@@ -58,7 +58,10 @@ def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices
         fund_flow_section = "  资金流数据暂无"
 
     # 公告
-    notice_section = "\n".join(f"  {n}" for n in notices) if notices else "  近3日无新公告"
+    if notices:
+        notice_section = "\n".join(f"  {n.get('date','')} {n.get('title','')}" for n in notices)
+    else:
+        notice_section = "  近7日无新公告"
 
     # 关键价位
     levels_line = f"压力 {levels.get('压力2')} / {levels.get('压力1')}  支撑 {levels.get('支撑1')} / {levels.get('支撑2')}"
@@ -233,9 +236,10 @@ def generate_combined_report(all_data: list, slot_desc: str) -> str:
 
         # 公告
         if notices:
-            text += f"公告: {' / '.join(notices[:3])}\n"
+            notice_strs = [f"{n.get('date','')}「{n.get('type','')}」{n.get('title','')}" for n in notices[:3]]
+            text += f"公告: {' / '.join(notice_strs)}\n"
         else:
-            text += "公告: 无\n"
+            text += "公告: 近7日无新公告\n"
 
         text += "\n"
 
