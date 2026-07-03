@@ -47,29 +47,69 @@ def send_message(text: str, disable_preview: bool = True) -> bool:
 def send_codeblock(text: str, caption: str = "") -> bool:
     """用代码块发送长文本（TG 里长按可一键复制）
 
+    超长时自动拆成多条代码块发送（每条带 (1/N) 标记），绝不降级为 txt 文件，
+    保证用户长按就能一键复制。
+
     Args:
         text: 要放进代码块的内容
-        caption: 代码块前的说明文字
+        caption: 第一条消息前的说明文字
     Returns:
         bool: 是否发送成功
     """
-    # TG 单条上限 4096，代码块标记 ``` 占 6 字符，留余量
-    max_len = 3800
-    if len(text) > max_len:
-        logger.warning(f"代码块内容超长({len(text)}>{max_len})，改发文件")
-        return send_document(text, caption=caption)
+    # TG 单条上限 4096，留出 caption + 代码块标记 + 分页标记的余量
+    chunk_size = 3500
 
-    # 拼接：caption + 代码块
-    message = ""
-    if caption:
-        message = caption + "\n\n"
-    message += "```\n" + text + "\n```"
+    if len(text) <= chunk_size:
+        message = (caption + "\n\n" if caption else "") + "```\n" + text + "\n```"
+        if len(message) > 4096:
+            # caption 太长导致超限，把 caption 单独发
+            if caption:
+                send_message(caption)
+            return send_message("```\n" + text + "\n```")
+        return send_message(message)
 
-    if len(message) > 4096:
-        # 加上 caption 和标记后超长，改发文件
-        return send_document(text, caption=caption)
+    # 超长：按行拆分，保证不切断一行内容
+    chunks = _split_text_by_lines(text, chunk_size)
+    total = len(chunks)
+    logger.info(f"代码块内容 {len(text)} 字符，拆成 {total} 条发送")
 
-    return send_message(message)
+    # 第一条带 caption
+    for i, chunk in enumerate(chunks):
+        prefix = f"({i+1}/{total}) " if total > 1 else ""
+        if i == 0 and caption:
+            msg = caption + "\n\n" + prefix + "```\n" + chunk + "\n```"
+            if len(msg) > 4096:
+                send_message(caption)
+                send_message(prefix + "```\n" + chunk + "\n```")
+            else:
+                send_message(msg)
+        else:
+            send_message(prefix + "```\n" + chunk + "\n```")
+    return True
+
+
+def _split_text_by_lines(text: str, max_size: int) -> list:
+    """按行拆分文本，每段不超过 max_size 字符，不切断一行"""
+    lines = text.split("\n")
+    chunks = []
+    current = ""
+    for line in lines:
+        # 单行就超长，硬切
+        if len(line) + 1 > max_size:
+            if current:
+                chunks.append(current)
+                current = ""
+            for i in range(0, len(line), max_size):
+                chunks.append(line[i:i + max_size])
+            continue
+        if len(current) + len(line) + 1 > max_size:
+            chunks.append(current)
+            current = line
+        else:
+            current = current + "\n" + line if current else line
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def send_long_message(text: str) -> bool:

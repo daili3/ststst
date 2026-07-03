@@ -43,7 +43,7 @@ SCHEDULE_SLOTS = {
     "open_5min":  {"time": "09:35", "desc": "开盘速报",   "use_realtime": True},
     "mid_morning":{"time": "10:30", "desc": "盘中信号",   "use_realtime": True},
     "noon_open":  {"time": "13:05", "desc": "午盘速报",   "use_realtime": True},
-    "tail":       {"time": "14:55", "desc": "尾盘决策",   "use_realtime": True},
+    "tail":       {"time": "14:50", "desc": "尾盘决策",   "use_realtime": True},
 }
 
 # ============ Telegram 配置 ============
