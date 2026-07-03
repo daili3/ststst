@@ -117,8 +117,14 @@ def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices
     return report
 
 
-def generate_summary(all_reports: list, slot_desc: str) -> str:
-    """生成汇总消息：按评分排名 + 重点关注"""
+def generate_summary(all_reports: list, slot_desc: str, total_pool: int = None) -> str:
+    """生成汇总消息：按评分排名 + 重点关注
+
+    Args:
+        all_reports: Top N 股票的 (stock, signals, ind)
+        slot_desc: 时段描述
+        total_pool: 全量股票池大小（用于显示"从 N 只中选出"）
+    """
     today = datetime.now().strftime("%Y-%m-%d")
 
     # 按评分排序
@@ -129,30 +135,33 @@ def generate_summary(all_reports: list, slot_desc: str) -> str:
     ranked.sort(key=lambda x: x[3], reverse=True)
 
     header = f"📊 {today} {slot_desc}\n"
-    header += f"共 {len(ranked)} 只 | "
+    if total_pool and total_pool > len(ranked):
+        header += f"从 {total_pool} 只中选出 Top {len(ranked)} | "
+    else:
+        header += f"共 {len(ranked)} 只 | "
 
     bull = sum(1 for _, _, _, s in ranked if s >= 55)
     bear = sum(1 for _, _, _, s in ranked if s < 45)
     neutral = len(ranked) - bull - bear
     header += f"🟢偏多 {bull}  ⚪中性 {neutral}  🔴偏空 {bear}\n"
     header += "━━━━━━━━━━━━━━━━━━━━\n"
-    header += "🏆 评分排名：\n\n"
+    header += "🏆 Top 推荐排名：\n\n"
 
     for i, (stock, signals, ind, score) in enumerate(ranked, 1):
         code, name = stock["code"], stock["name"]
         emoji = score_emoji(score)
         label = score_label(score)
-        # 最值得关注：评分最高 + 评分最低
+        # 最值得关注：评分最高
         if i == 1:
             mark = "⭐ 重点关注"
-        elif i == len(ranked):
+        elif i == len(ranked) and score < 45:
             mark = "⚠️ 最弱"
         else:
             mark = ""
         header += f"{i}. {emoji} {name}({code}) {score}分 {label} {mark}\n"
 
     header += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    header += "后续消息是每只股票的详细简报，复制给 AI 网页版获取操作建议。"
+    header += "下方是 Top 推荐的合并简报（代码块），长按复制给 AI 网页版获取操作建议。"
 
     return header
 

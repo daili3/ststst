@@ -4,18 +4,50 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ============ 自选股池 ============
-# 低价蓝筹，流动性好，规则派友好
+# ============ 自选股池（30只行业龙头，分散配置）============
+# 每次推送评分最高的 Top 5
 STOCK_LIST = [
+    # 金融（银行/保险/券商）
     {"code": "000001", "name": "平安银行", "market": "sz"},
     {"code": "600036", "name": "招商银行", "market": "sh"},
-    {"code": "601628", "name": "中国人寿", "market": "sh"},
-    {"code": "600900", "name": "长江电力", "market": "sh"},
     {"code": "601398", "name": "工商银行", "market": "sh"},
-    {"code": "603626", "name": "科森科技", "market": "sh"},
+    {"code": "601166", "name": "兴业银行", "market": "sh"},
+    {"code": "601628", "name": "中国人寿", "market": "sh"},
+    {"code": "601318", "name": "中国平安", "market": "sh"},
+    {"code": "600030", "name": "中信证券", "market": "sh"},
+    # 消费（白酒/家电/食品）
+    {"code": "600519", "name": "贵州茅台", "market": "sh"},
+    {"code": "000858", "name": "五粮液", "market": "sz"},
+    {"code": "600887", "name": "伊利股份", "market": "sh"},
+    {"code": "000333", "name": "美的集团", "market": "sz"},
+    {"code": "000651", "name": "格力电器", "market": "sz"},
+    # 科技/电子
     {"code": "000988", "name": "华工科技", "market": "sz"},
+    {"code": "603626", "name": "科森科技", "market": "sh"},
+    {"code": "000725", "name": "京东方A", "market": "sz"},
+    {"code": "002475", "name": "立讯精密", "market": "sz"},
+    {"code": "002241", "name": "歌尔股份", "market": "sz"},
+    # 新能源
+    {"code": "300750", "name": "宁德时代", "market": "sz"},
+    {"code": "002594", "name": "比亚迪", "market": "sz"},
+    {"code": "601012", "name": "隆基绿能", "market": "sh"},
+    # 医药
+    {"code": "600276", "name": "恒瑞医药", "market": "sh"},
+    {"code": "000538", "name": "云南白药", "market": "sz"},
+    # 基建/电力/建筑
+    {"code": "600900", "name": "长江电力", "market": "sh"},
     {"code": "601789", "name": "宁波建工", "market": "sh"},
+    {"code": "601668", "name": "中国建筑", "market": "sh"},
+    {"code": "601800", "name": "中国交建", "market": "sh"},
+    # 周期（有色/能源/化工）
+    {"code": "601899", "name": "紫金矿业", "market": "sh"},
+    {"code": "600028", "name": "中国石化", "market": "sh"},
+    {"code": "601088", "name": "中国神华", "market": "sh"},
+    {"code": "600309", "name": "万华化学", "market": "sh"},
 ]
+
+# 每次推送评分最高的 N 只（Top N）
+TOP_N = 5
 
 # ============ 指标参数 ============
 INDICATOR_PARAMS = {
@@ -39,10 +71,10 @@ SIGNAL_THRESHOLDS = {
 # ============ 推送时段 ============
 # 每个时段对应的任务类型
 SCHEDULE_SLOTS = {
-    "pre_open":   {"time": "09:15", "desc": "盘前简报",   "use_realtime": False},
-    "open_5min":  {"time": "09:35", "desc": "开盘速报",   "use_realtime": True},
-    "mid_morning":{"time": "10:30", "desc": "盘中信号",   "use_realtime": True},
-    "noon_open":  {"time": "13:05", "desc": "午盘速报",   "use_realtime": True},
+    "pre_open":   {"time": "09:03", "desc": "盘前简报",   "use_realtime": False},
+    "open_5min":  {"time": "09:37", "desc": "开盘速报",   "use_realtime": True},
+    "mid_morning":{"time": "10:32", "desc": "盘中信号",   "use_realtime": True},
+    "noon_open":  {"time": "13:07", "desc": "午盘速报",   "use_realtime": True},
     "tail":       {"time": "14:50", "desc": "尾盘决策",   "use_realtime": True},
 }
 
@@ -63,7 +95,7 @@ AI_PROMPT_TEMPLATE = """基于以下数据简报，请给出操作建议：
 # 批量分析提示词（一次性分析多只股票，小白友好版）
 AI_PROMPT_BATCH = """你是一位 A股短线交易分析师，但你的用户是**完全不懂股票的小白**。请用大白话给出操作建议，禁止使用专业术语（如果必须用，要在括号里解释）。
 
-以下是多只股票的数据简报，请对每只股票分别给出操作建议。
+以下是从 30 只行业龙头股中按技术信号评分选出的 Top 5 推荐股票数据简报。请对每只股票分别给出操作建议。
 
 ## 每只股票必须包含：
 
