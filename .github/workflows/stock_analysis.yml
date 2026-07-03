@@ -2,14 +2,14 @@ name: A股信号分析推送
 
 # 触发条件：5 个定时 + 手动
 # cron 用 UTC 时间，北京时间 = UTC + 8
-# 盘前提前到 9:00 触发，留 15 分钟延迟余量（GitHub Actions cron 通常延迟 5-15 分钟）
+# 注意：GitHub Actions 整点/半点高负载易跳过，故全部偏移到非整点
 on:
   schedule:
-    - cron: '0 1 * * 1-5'    # 北京 09:00 → 盘前简报
-    - cron: '35 1 * * 1-5'   # 北京 09:35 → 开盘 5 分钟速报
-    - cron: '30 2 * * 1-5'   # 北京 10:30 → 盘中信号
-    - cron: '5 5 * * 1-5'    # 北京 13:05 → 午盘速报
-    - cron: '55 6 * * 1-5'   # 北京 14:55 → 尾盘决策
+    - cron: '3 1 * * 1-5'    # 北京 09:03 → 盘前简报（避开整点高负载）
+    - cron: '37 1 * * 1-5'   # 北京 09:37 → 开盘 5 分钟速报
+    - cron: '32 2 * * 1-5'   # 北京 10:32 → 盘中信号（避开半点）
+    - cron: '7 5 * * 1-5'    # 北京 13:07 → 午盘速报
+    - cron: '57 6 * * 1-5'   # 北京 14:57 → 尾盘决策
   workflow_dispatch:
     inputs:
       slot:
@@ -53,11 +53,11 @@ jobs:
           else
             # 定时触发：根据 schedule 字符串映射
             case "${{ github.event.schedule }}" in
-              "0 1 * * 1-5")    echo "slot=pre_open" >> $GITHUB_OUTPUT ;;
-              "35 1 * * 1-5")   echo "slot=open_5min" >> $GITHUB_OUTPUT ;;
-              "30 2 * * 1-5")   echo "slot=mid_morning" >> $GITHUB_OUTPUT ;;
-              "5 5 * * 1-5")    echo "slot=noon_open" >> $GITHUB_OUTPUT ;;
-              "55 6 * * 1-5")   echo "slot=tail" >> $GITHUB_OUTPUT ;;
+              "3 1 * * 1-5")    echo "slot=pre_open" >> $GITHUB_OUTPUT ;;
+              "37 1 * * 1-5")   echo "slot=open_5min" >> $GITHUB_OUTPUT ;;
+              "32 2 * * 1-5")   echo "slot=mid_morning" >> $GITHUB_OUTPUT ;;
+              "7 5 * * 1-5")    echo "slot=noon_open" >> $GITHUB_OUTPUT ;;
+              "57 6 * * 1-5")   echo "slot=tail" >> $GITHUB_OUTPUT ;;
               *)                echo "slot=pre_open" >> $GITHUB_OUTPUT ;;
             esac
             echo "来源: 定时触发 (${{ github.event.schedule }})"
