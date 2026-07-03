@@ -12,6 +12,9 @@ STOCK_LIST = [
     {"code": "601628", "name": "中国人寿", "market": "sh"},
     {"code": "600900", "name": "长江电力", "market": "sh"},
     {"code": "601398", "name": "工商银行", "market": "sh"},
+    {"code": "603626", "name": "科森科技", "market": "sh"},
+    {"code": "000988", "name": "华工科技", "market": "sz"},
+    {"code": "601789", "name": "宁波建工", "market": "sh"},
 ]
 
 # ============ 指标参数 ============
