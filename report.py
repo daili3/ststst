@@ -4,7 +4,7 @@ from signals import (
     format_signal, overall_bias, calc_signal_score, score_label, score_emoji,
     trend_description, momentum_description, heat_description, key_levels,
 )
-from config import AI_PROMPT_TEMPLATE, AI_PROMPT_BATCH
+from config import AI_PROMPT_TEMPLATE, AI_PROMPT_BATCH, AI_PROMPT_FRIDAY_TAIL
 
 
 def generate_report(stock: dict, ind: dict, signals: list, fund_flow_df, notices: list,
@@ -166,18 +166,20 @@ def generate_summary(all_reports: list, slot_desc: str, total_pool: int = None) 
     return header
 
 
-def generate_combined_report(all_data: list, slot_desc: str) -> str:
+def generate_combined_report(all_data: list, slot_desc: str, prompt: str = None) -> str:
     """生成合并简报：所有股票数据打包，一次性复制给 AI
 
     Args:
         all_data: [(stock, signals, ind, fund_flow_df, notices, realtime), ...]
         slot_desc: 时段描述
+        prompt: 自定义提示词（默认用 AI_PROMPT_BATCH）
     Returns:
         合并文本，用于发送 TG 文档
     """
     today = datetime.now().strftime("%Y-%m-%d")
 
-    text = AI_PROMPT_BATCH.strip() + "\n\n"
+    use_prompt = prompt if prompt else AI_PROMPT_BATCH
+    text = use_prompt.strip() + "\n\n"
     text += f"# {today} {slot_desc} 合并数据简报（共 {len(all_data)} 只）\n\n"
 
     for stock, signals, ind, fund_flow_df, notices, realtime in all_data:

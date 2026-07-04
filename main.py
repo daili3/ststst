@@ -10,7 +10,7 @@ import sys
 import logging
 from datetime import datetime
 
-from config import STOCK_LIST, SCHEDULE_SLOTS, TOP_N
+from config import STOCK_LIST, SCHEDULE_SLOTS, TOP_N, AI_PROMPT_FRIDAY_TAIL
 from data_fetcher import (
     get_daily_kline, get_realtime_quote, get_fund_flow,
     get_notices, is_trading_day, baostock_logout,
@@ -107,20 +107,30 @@ def run_slot(slot_key: str) -> int:
         return 2
 
     # ========== 推送 ==========
+    # 周五尾盘特殊处理：切换提示词，只评估持仓过周末风险
+    is_friday = datetime.now().weekday() == 4  # 0=周一, 4=周五
+    is_friday_tail = is_friday and slot_key == "tail"
+
+    if is_friday_tail:
+        slot_desc_display = f"{slot['desc']}（周五·周末风险提示）"
+        prompt = AI_PROMPT_FRIDAY_TAIL
+        caption = f"📋 {slot_desc_display} Top {len(all_data)} 简报\n⚠️ 周五尾盘：只评估持仓过周末风险，不给买入建议\n长按下方代码块 → 复制 → 粘到 AI 网页版"
+    else:
+        slot_desc_display = slot["desc"]
+        prompt = None
+        caption = f"📋 {slot['desc']} Top {len(all_data)} 推荐简报\n长按下方代码块 → 复制 → 粘到 AI 网页版"
+
     # 1. 汇总（Top N 排名 + 全池扫描概况）
-    summary = generate_summary(all_reports, slot["desc"], total_pool=len(scored))
+    summary = generate_summary(all_reports, slot_desc_display, total_pool=len(scored))
     send_message(summary)
     logger.info("汇总已推送")
 
     # 2. 合并简报（代码块，长按一键复制给 AI）
-    combined = generate_combined_report(all_data, slot["desc"])
-    send_codeblock(
-        combined,
-        caption=f"📋 {slot['desc']} Top {len(all_data)} 推荐简报\n长按下方代码块 → 复制 → 粘到 AI 网页版",
-    )
+    combined = generate_combined_report(all_data, slot_desc_display, prompt=prompt)
+    send_codeblock(combined, caption=caption)
     logger.info("合并简报已推送")
 
-    logger.info(f"========== {slot['desc']} 完成 ==========")
+    logger.info(f"========== {slot_desc_display} 完成 ==========")
     return 0
 
 
